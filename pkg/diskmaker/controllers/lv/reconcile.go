@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"strings"
 	"time"
 
 	localv1 "github.com/openshift/local-storage-operator/api/v1"
@@ -513,51 +512,51 @@ func (r *LocalVolumeReconciler) findMatchingDisks(diskConfig *DiskConfig, blockD
 		forceWipe := disks.ForceWipeDevicesAndDestroyAllData
 		for _, devicePath := range devicePaths {
 			// handle user provided device_ids first
-			if strings.HasPrefix(devicePath, diskByIDPrefix) {
-				matchedDeviceID, matchedDiskName, err := r.findDeviceByID(devicePath)
-				if err != nil {
-					msg := fmt.Sprintf("unable to add disk-id %s to local disk pool: %v", devicePath, err)
-					r.eventSync.Report(r.localVolume, newDiskEvent(ErrorFindingMatchingDisk, msg, devicePath, corev1.EventTypeWarning))
-					klog.Error(msg)
-					continue
-				}
-				baseDeviceName := filepath.Base(matchedDiskName)
-				// We need to make sure that requested device is not already mounted.
-				blockDevice, matched := hasExactDisk(blockDevices, baseDeviceName)
-				if matched {
-					addDiskToMap(storageClass, matchedDeviceID, matchedDiskName, devicePath, blockDevice, forceWipe)
-				}
-			} else {
-				// handle anything other than device ids here - such as:
-				//   /dev/sda
-				//   /dev/sandbox/local
-				//   /dev/disk/by-path/ww-xx
+			// if strings.HasPrefix(devicePath, diskByIDPrefix) {
+			// 	matchedDeviceID, matchedDiskName, err := r.findDeviceByID(devicePath)
+			// 	if err != nil {
+			// 		msg := fmt.Sprintf("unable to add disk-id %s to local disk pool: %v", devicePath, err)
+			// 		r.eventSync.Report(r.localVolume, newDiskEvent(ErrorFindingMatchingDisk, msg, devicePath, corev1.EventTypeWarning))
+			// 		klog.Error(msg)
+			// 		continue
+			// 	}
+			// 	baseDeviceName := filepath.Base(matchedDiskName)
+			// 	// We need to make sure that requested device is not already mounted.
+			// 	blockDevice, matched := hasExactDisk(blockDevices, baseDeviceName)
+			// 	if matched {
+			// 		addDiskToMap(storageClass, matchedDeviceID, matchedDiskName, devicePath, blockDevice, forceWipe)
+			// 	}
+			// } else {
+			// handle anything other than device ids here - such as:
+			//   /dev/sda
+			//   /dev/sandbox/local
+			//   /dev/disk/by-path/ww-xx
 
-				// Evaluate symlink in case the device is a LVM device or something else
-				diskDevPath, err := r.fsInterface.evalSymlink(devicePath)
-				if err != nil {
-					msg := fmt.Sprintf("unable to add disk %s to local disk pool: %v", devicePath, err)
-					r.eventSync.Report(r.localVolume, newDiskEvent(ErrorFindingMatchingDisk, msg, devicePath, corev1.EventTypeWarning))
-					klog.Error(msg)
-					continue
-				}
-				baseDeviceName := filepath.Base(diskDevPath)
-				blockDevice, matched := hasExactDisk(blockDevices, baseDeviceName)
-				if matched {
-					matchedDeviceID, err := blockDevice.GetPathByID()
-					// This means no /dev/disk/by-id entry was created for requested device.
-					if err != nil {
-						klog.ErrorS(err, "unable to find disk ID for local pool",
-							"diskName", diskDevPath)
-						addDiskToMap(storageClass, "", diskDevPath, devicePath, blockDevice, forceWipe)
-						continue
-					}
-					addDiskToMap(storageClass, matchedDeviceID, diskDevPath, devicePath, blockDevice, forceWipe)
-					continue
-				} else {
-					r.logDeviceError(diskDevPath)
-				}
+			// Evaluate symlink in case the device is a LVM device or something else
+			diskDevPath, err := r.fsInterface.evalSymlink(devicePath)
+			if err != nil {
+				msg := fmt.Sprintf("unable to add disk %s to local disk pool: %v", devicePath, err)
+				r.eventSync.Report(r.localVolume, newDiskEvent(ErrorFindingMatchingDisk, msg, devicePath, corev1.EventTypeWarning))
+				klog.Error(msg)
+				continue
 			}
+			baseDeviceName := filepath.Base(diskDevPath)
+			blockDevice, matched := hasExactDisk(blockDevices, baseDeviceName)
+			if matched {
+				matchedDeviceID, err := blockDevice.GetPathByID()
+				// This means no /dev/disk/by-id entry was created for requested device.
+				if err != nil {
+					klog.ErrorS(err, "unable to find disk ID for local pool",
+						"diskName", diskDevPath)
+					addDiskToMap(storageClass, "", diskDevPath, devicePath, blockDevice, forceWipe)
+					continue
+				}
+				addDiskToMap(storageClass, matchedDeviceID, diskDevPath, devicePath, blockDevice, forceWipe)
+				continue
+			} else {
+				r.logDeviceError(diskDevPath)
+			}
+			//}
 		}
 	}
 
