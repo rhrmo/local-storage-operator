@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"strconv"
 	"strings"
 
 	configv1 "github.com/openshift/api/config/v1"
 	configlistersv1 "github.com/openshift/client-go/config/listers/config/v1"
 	crcommon "github.com/openshift/controller-runtime-common/pkg/tls"
+	libgocrypto "github.com/openshift/library-go/pkg/crypto"
 	libapiserver "github.com/openshift/library-go/pkg/operator/configobserver/apiserver"
 	libevents "github.com/openshift/library-go/pkg/operator/events"
 	"github.com/openshift/library-go/pkg/operator/resourcesynccontroller"
@@ -16,34 +18,71 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // GetTLSProfileValues fetches the cluster API Server TLS profile via
 // library-go's ObserveTLSSecurityProfile and returns TLS_MIN_VERSION, TLS_CIPHER_SUITES,
-// observedConfig for future comparisons and avoid unnecessary updates
+// TLS_CURVE_PREFERENCES, observedConfig for future comparisons and avoid unnecessary updates.
 // Returns empty strings on error so callers fall back to kube-rbac-proxy defaults.
-func GetTLSProfileValues(ctx context.Context, c client.Client, previousObservedConfig map[string]interface{}) (minVersion, cipherSuites string, observedConfig map[string]interface{}, err error) {
+//
+// Curve preferences are only produced when tlsGroupsEnabled is true (the TLSGroupPreferences
+// feature gate is enabled); otherwise an empty string is returned so callers leave curves
+// unrestricted. library-go's ObserveTLSSecurityProfile does not emit Groups, so they are read
+// from the profile spec directly and converted to numeric curve IDs; unrecognized groups are
+// warned-and-skipped rather than failing.
+func GetTLSProfileValues(ctx context.Context, c client.Client, tlsGroupsEnabled bool, previousObservedConfig map[string]interface{}) (minVersion, cipherSuites, curvePreferences string, observedConfig map[string]interface{}, err error) {
 	listers := &apiServerListers{&clientAPIServerLister{client: c, ctx: ctx}}
 	recorder := libevents.NewLoggingEventRecorder("local-storage-operator-tls", clock.RealClock{})
 
 	observedConfig, errors := libapiserver.ObserveTLSSecurityProfile(listers, recorder, previousObservedConfig)
 	if len(errors) > 0 {
-		return "", "", nil, fmt.Errorf("failed to observe TLS security profile: %v", errors)
+		return "", "", "", nil, fmt.Errorf("failed to observe TLS security profile: %v", errors)
 	}
 
 	minVersion, _, err = unstructured.NestedString(observedConfig, "servingInfo", "minTLSVersion")
 	if err != nil {
-		return "", "", nil, fmt.Errorf("failed to extract minTLSVersion from observed config: %w", err)
+		return "", "", "", nil, fmt.Errorf("failed to extract minTLSVersion from observed config: %w", err)
 	}
 
 	suites, _, err := unstructured.NestedStringSlice(observedConfig, "servingInfo", "cipherSuites")
 	if err != nil {
-		return "", "", nil, fmt.Errorf("failed to extract cipherSuites from observed config: %w", err)
+		return "", "", "", nil, fmt.Errorf("failed to extract cipherSuites from observed config: %w", err)
 	}
 
-	return minVersion, strings.Join(suites, ","), observedConfig, nil
+	return minVersion, strings.Join(suites, ","), getCurvePreferences(ctx, c, tlsGroupsEnabled), observedConfig, nil
+}
+
+// getCurvePreferences returns the comma-separated list of numeric TLS curve IDs derived from
+// the cluster API Server TLS profile's Groups, or an empty string when the TLSGroupPreferences
+// feature gate is disabled, no groups are configured, or the profile cannot be read. Unrecognized
+// groups are warned-and-skipped.
+func getCurvePreferences(ctx context.Context, c client.Client, tlsGroupsEnabled bool) string {
+	if !tlsGroupsEnabled {
+		return ""
+	}
+
+	profile, err := FetchAPIServerTLSProfile(ctx, c)
+	if err != nil {
+		klog.Warningf("failed to fetch TLS profile for curve preferences, proceeding without: %v", err)
+		return ""
+	}
+
+	curveIDs, unrecognized := libgocrypto.TLSGroupsToCurvePreferences(profile.Groups)
+	if len(unrecognized) > 0 {
+		klog.Warningf("ignoring unrecognized TLS groups: %v", unrecognized)
+	}
+	if len(curveIDs) == 0 {
+		return ""
+	}
+
+	ids := make([]string, len(curveIDs))
+	for i, id := range curveIDs {
+		ids[i] = strconv.Itoa(int(id))
+	}
+	return strings.Join(ids, ",")
 }
 
 // clientAPIServerLister implements configlistersv1.APIServerLister backed by a
