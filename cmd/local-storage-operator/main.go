@@ -22,6 +22,7 @@ import (
 	"flag"
 	"os"
 	"runtime"
+	"slices"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -151,12 +152,16 @@ func main() {
 	var tlsConfigFn func(*tls.Config)
 	if libcrypto.ShouldHonorClusterTLSProfile(adherence) {
 		// Drop Groups when the feature gate is disabled so the metrics server does
-		// not restrict curves (Surface A feature-gate gating).
+		// not restrict curves (Surface A feature-gate gating). Operate on a copy so
+		// the watcher baseline below keeps the full fetched profile; otherwise the
+		// watcher would compare a Groups-stripped baseline against the live APIServer
+		// profile and trigger a spurious restart on every startup.
+		metricsProfile := tlsProfile
 		if !tlsGroupsEnabled {
-			tlsProfile.Groups = nil
+			metricsProfile.Groups = nil
 		}
 		var unsupportedCiphers []string
-		tlsConfigFn, unsupportedCiphers = lsotls.GetTLSConfigFromProfile(tlsProfile)
+		tlsConfigFn, unsupportedCiphers = lsotls.GetTLSConfigFromProfile(metricsProfile)
 		if len(unsupportedCiphers) > 0 {
 			klog.Warningf("TLS profile contains %d unsupported cipher suites: %v",
 				len(unsupportedCiphers), unsupportedCiphers)
@@ -300,6 +305,13 @@ func resolveTLSGroupPreferencesEnabled(restConfig *rest.Config) bool {
 		featureGates, err := featureGateAccess.CurrentFeatureGates()
 		if err != nil {
 			klog.ErrorS(err, "unable to read feature gates; assuming TLSGroupPreferences disabled")
+			return false
+		}
+		// Enabled panics if the gate is not registered for the resolved version,
+		// which happens on releases where TLSGroupPreferences does not exist yet.
+		// Treat an unknown gate as disabled, matching the pre-GA default.
+		if !slices.Contains(featureGates.KnownFeatures(), features.FeatureGateTLSGroupPreferences) {
+			klog.Infof("TLSGroupPreferences feature gate not registered; assuming disabled")
 			return false
 		}
 		enabled := featureGates.Enabled(features.FeatureGateTLSGroupPreferences)
