@@ -318,7 +318,8 @@ func resolveTLSGroupPreferencesEnabled(restConfig *rest.Config) bool {
 		klog.Infof("TLSGroupPreferences feature gate enabled: %t", enabled)
 		return enabled
 	case <-time.After(60 * time.Second):
-		klog.Warning("timed out waiting for feature gates to be observed; assuming TLSGroupPreferences disabled")
-		return false
+		klog.Error("timed out waiting for feature gates to be observed")
+		os.Exit(1)
 	}
+	return false
 }
