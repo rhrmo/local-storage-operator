@@ -38,7 +38,7 @@ func newFakeClientWithAPIServer(profile *configv1.TLSSecurityProfile) client.Cli
 	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(apiServer).Build()
 }
 
-func TestGetCurvePreferences(t *testing.T) {
+func TestGetTLSProfileValuesCurvePreferences(t *testing.T) {
 	customProfile := func(groups []configv1.TLSGroup) *configv1.TLSSecurityProfile {
 		return &configv1.TLSSecurityProfile{
 			Type: configv1.TLSProfileCustomType,
@@ -91,7 +91,8 @@ func TestGetCurvePreferences(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newFakeClientWithAPIServer(tc.profile)
-			got := getCurvePreferences(context.Background(), c, tc.tlsGroupsEnabled)
+			_, _, got, _, err := GetTLSProfileValues(context.Background(), c, tc.tlsGroupsEnabled, nil)
+			assert.NoError(t, err)
 			assert.Equal(t, tc.expected, got)
 		})
 	}
